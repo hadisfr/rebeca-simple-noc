@@ -1,0 +1,223 @@
+reactiveclass Starter(3) {
+    knownrebecs {
+        CPU cpu_1_1, cpu_1_2, cpu_1_3, cpu_2_1, cpu_2_2, cpu_2_3, cpu_3_1, cpu_3_2, cpu_3_3;
+    }
+    statevars {
+    	boolean cpu_1_1_ack_recieved;
+    	boolean cpu_1_3_ack_recieved;
+    	boolean cpu_3_3_msg_recieved;
+    	boolean cpu_2_2_msg_recieved;
+    	int _first_recieved, _second_recieved;
+    }
+    Starter(int active_scenario) {
+        if (active_scenario == 1) {
+            self.scenario1();
+        } else if (active_scenario == 2) {
+            self.scenario2();
+        }
+        cpu_1_1_ack_recieved = false;
+        cpu_1_3_ack_recieved = false;
+        cpu_3_3_msg_recieved = false;
+        cpu_2_2_msg_recieved = false;
+        _first_recieved = 0;
+        _second_recieved = 0;
+    }
+    msgsrv scenario1() {
+        cpu_1_1.send_new_msg(3, 3, 2);
+        self.scenario1_check() after(5);
+    }
+    msgsrv scenario2() {
+        cpu_1_1.send_new_msg(2, 2, 1);
+        cpu_1_3.send_new_msg(2, 2, 3);
+        self.scenario2_check() after(20);      
+    }
+    msgsrv ack_recieved(int msg, int row, int col) {
+    	if (sender == cpu_1_1)
+    		cpu_1_1_ack_recieved = true;
+    	else if (sender == cpu_1_3)
+    		cpu_1_3_ack_recieved = true;
+    }
+    msgsrv msg_recieved(int msg, int row, int col) {
+    	if (sender == cpu_2_2) {
+    		cpu_2_2_msg_recieved = true;
+    		if (row == 1 && col == 1)
+    			_first_recieved = msg;
+    		else if (row == 1 && col == 3)
+    			_second_recieved = msg; 
+    	}
+    	if (sender == cpu_3_3) {
+    		cpu_3_3_msg_recieved = true;
+    		if (row == 1 && col == 1)
+    			_first_recieved = msg;
+    	}
+    }
+    msgsrv scenario1_check() {
+    	assertion(cpu_3_3_msg_recieved && _first_recieved == 2);
+    	self.successfully_end();
+    }
+    msgsrv scenario2_check() {
+    	assertion(cpu_1_1_ack_recieved);
+    	assertion(cpu_1_3_ack_recieved);
+    	assertion(_first_recieved == 1 && _second_recieved == 3);
+    	self.successfully_end();
+    }
+    msgsrv successfully_end() {
+    	assertion(false);
+    }
+}
+
+reactiveclass CPU(10) {
+    knownrebecs {
+        CPU right;
+        CPU left;
+        CPU top;
+        CPU bottom;
+        Starter ctrl;
+    }
+    statevars {
+        int _row, _col;
+        boolean _is_busy;
+        
+        int _next_msg_from_row;
+        int _next_msg_from_col;
+        int _next_msg_src_row;
+        int _next_msg_src_col;
+        int _next_msg_dst_row;
+        int _next_msg_dst_col;
+        boolean _next_msg_is_ack;
+        boolean _ack_recieved;
+        int _my_msg;
+        int _my_dst_row;
+        int _my_dst_col;
+        int _msg;
+        
+        int _last_msg_id;
+    }
+    CPU(int row, int col) {
+        _row = row;
+        _col = col;
+        _is_busy = false;
+        _last_msg_id = 0;
+        _ack_recieved = false;
+    }
+    
+    msgsrv send_new_msg(int dst_row, int dst_col, int msg) {
+    	_my_msg = msg;
+    	_my_dst_row = dst_row;
+    	_my_dst_col = dst_col;
+        self.recv_msg(_row, _col, _row, _col, dst_row, dst_col, false, msg);
+        self.check_if_ack_recievd() after(10);
+    }
+    
+    msgsrv check_if_ack_recievd() {
+    	if(!_ack_recieved)
+    		self.send_new_msg(_my_dst_row, _my_dst_col, _my_msg);
+    }
+    
+    msgsrv check_if_is_free() {
+        if (!_is_busy)
+            ((CPU)sender).get_msg();
+    }
+    
+    msgsrv get_msg() {
+    	if (_is_busy) {
+            if (_next_msg_dst_col < _col && sender == left)
+                left.recv_msg(
+                    _row, _col,
+                    _next_msg_src_row, _next_msg_src_col,
+                    _next_msg_dst_row, _next_msg_dst_col,
+                    _next_msg_is_ack, _msg
+                ) after(1);
+            else if (_next_msg_dst_col > _col && sender == right)
+                right.recv_msg(
+                    _row, _col,
+                    _next_msg_src_row, _next_msg_src_col,
+                    _next_msg_dst_row, _next_msg_dst_col,
+                    _next_msg_is_ack, _msg
+                ) after(1);
+            else if (_next_msg_dst_row < _row && sender == top)
+                top.recv_msg(
+                    _row, _col,
+                    _next_msg_src_row, _next_msg_src_col,
+                    _next_msg_dst_row, _next_msg_dst_col,
+                    _next_msg_is_ack, _msg
+                ) after(1);
+            else if (_next_msg_dst_row > _row && sender == bottom)
+                bottom.recv_msg(
+                    _row, _col,
+                    _next_msg_src_row, _next_msg_src_col,
+                    _next_msg_dst_row, _next_msg_dst_col,
+                    _next_msg_is_ack, _msg
+                ) after(1);
+            _is_busy = false;
+        }
+    }
+    
+    msgsrv resend_if_necessary(int msg_id) {
+    	if (_is_busy && _last_msg_id == msg_id)
+    		self.send_msg();
+    }
+    
+    msgsrv send_msg() {
+    	if (_next_msg_dst_col < _col)
+            left.check_if_is_free();
+        else if (_next_msg_dst_col > _col)
+            right.check_if_is_free();
+        else if (_next_msg_dst_row < _row)
+            top.check_if_is_free();
+        else if (_next_msg_dst_row > _row)
+            bottom.check_if_is_free();
+        else {
+            _is_busy = false;
+            if (_next_msg_is_ack) {
+            	// assertion(false);
+            	_ack_recieved = true;
+                ctrl.ack_recieved(_msg, _next_msg_dst_row, _next_msg_dst_col);
+            } else {
+            	ctrl.msg_recieved(_msg, _next_msg_src_row, _next_msg_src_col);
+                self.send_new_ack(_next_msg_src_row, _next_msg_src_col, _msg);
+            }
+        }
+    }
+    
+    msgsrv recv_msg(
+        int from_row, int from_col,
+        int src_row, int src_col,
+        int dst_row, int dst_col,
+        boolean is_ack, int msg
+    ) {
+        if (!_is_busy) {
+            _next_msg_from_row = from_row;
+            _next_msg_from_col = from_col;
+            _next_msg_src_row = src_row;
+            _next_msg_src_col = src_col;
+            _next_msg_dst_row = dst_row;
+            _next_msg_dst_col = dst_col;
+            _next_msg_is_ack = is_ack;
+            _is_busy = true;
+            _msg = msg;
+            
+            self.resend_if_necessary(++_last_msg_id) after(1);
+            self.send_msg();
+        }
+    }
+    
+    msgsrv send_new_ack(int dst_row, int dst_col, int msg) {
+        self.recv_msg(_row, _col, _row, _col, dst_row, dst_col, true, msg);
+    }
+}
+
+main {
+    CPU cpu_1_1(cpu_1_2, cpu_1_1, cpu_1_1, cpu_2_1, starter):(1, 1);
+    CPU cpu_1_2(cpu_1_3, cpu_1_1, cpu_1_2, cpu_2_2, starter):(1, 2);
+    CPU cpu_1_3(cpu_1_3, cpu_1_2, cpu_1_3, cpu_2_3, starter):(1, 3);
+    CPU cpu_2_1(cpu_2_2, cpu_2_1, cpu_1_1, cpu_3_1, starter):(2, 1);
+    CPU cpu_2_2(cpu_2_3, cpu_2_1, cpu_1_2, cpu_3_2, starter):(2, 2);
+    CPU cpu_2_3(cpu_2_3, cpu_2_2, cpu_1_3, cpu_3_3, starter):(2, 3);
+    CPU cpu_3_1(cpu_3_2, cpu_3_1, cpu_2_1, cpu_3_1, starter):(3, 1);
+    CPU cpu_3_2(cpu_3_3, cpu_3_1, cpu_2_2, cpu_3_2, starter):(3, 2);
+    CPU cpu_3_3(cpu_3_3, cpu_3_2, cpu_2_3, cpu_3_3, starter):(3, 3);
+    Starter starter(
+    	cpu_1_1, cpu_1_2, cpu_1_3, cpu_2_1, cpu_2_2, cpu_2_3, cpu_3_1, cpu_3_2, cpu_3_3
+    ): (2);
+}
